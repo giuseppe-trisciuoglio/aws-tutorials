@@ -372,3 +372,4 @@ Temporary Items
 **/.aws-sam/
 **/target/
 **/**.toml
+**/dependency-reduced-pom.xml

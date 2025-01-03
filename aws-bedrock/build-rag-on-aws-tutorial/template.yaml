@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Knowledge Base & Rag Service with EventBridge trigger
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Environment name for deployment
+  
+  AccessARN:
+    Description: ARN of the role or user used to access console for this deployment.
+    Type: String
+  
+  OpenSearchCollectionName:
+    Description: Name of the Amazon OpenSearch Service Serverless collection.
+    Default: rag-on-aws-kb
+    Type: String
+
+  OpenSearchIndexName:
+    Description: Name of the vector index in the Amazon OpenSearch Service Serverless collection.
+    Default: rag-on-aws-index
+    Type: String
+
+  ProjectName:
+    Type: String
+    Default: rag-on-aws
+    Description: Project name for resource tagging
+
+Globals:
+  Function:
+    Tags:
+      Project: !Ref ProjectName
+      Environment: !Ref Environment
+      ManagedBy: SAM
+    Tracing: Active
+
+Resources:
+  KnowledgeBaseBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-knowledge-base-bucket-${Environment}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: SAM
+
+  KBDataAccessPolicy:
+    Type: 'AWS::OpenSearchServerless::AccessPolicy'
+    Properties:
+      Name: !Sub ${OpenSearchCollectionName}-access-${Environment}
+      Type: data
+      Description: Access policy for the AOSS collection
+      Policy: !Sub >-
+        [{"Description":"Access for cfn user","Rules":[{"ResourceType":"index","Resource":["index/*/*"],"Permission":["aoss:*"]},
+        {"ResourceType":"collection","Resource":["collection/${OpenSearchCollectionName}-${Environment}"],"Permission":["aoss:*"]}],
+        "Principal":["${AccessARN}"]}]
+
+  KBNetworkPolicy:
+    Type: 'AWS::OpenSearchServerless::SecurityPolicy'
+    Properties:
+      Name: !Sub ${OpenSearchCollectionName}-net-${Environment}
+      Type: network
+      Description: Network policy for the AOSS collection
+      Policy: !Sub >-
+        [{"Rules":[{"ResourceType":"collection","Resource":["collection/${OpenSearchCollectionName}-${Environment}"]}, {"ResourceType":"dashboard","Resource":["collection/${OpenSearchCollectionName}-${Environment}"]}],"AllowFromPublic":true}]
+
+  KBSecurityPolicy:
+    Type: 'AWS::OpenSearchServerless::SecurityPolicy'
+    Properties:
+      Name: !Sub ${OpenSearchCollectionName}-sec-${Environment}
+      Type: encryption
+      Description: Encryption policy for the AOSS collection
+      Policy: !Sub >-
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/${OpenSearchCollectionName}-${Environment}"]}],"AWSOwnedKey":true}
+
+  KnowledgeBaseCollection:
+    Type: 'AWS::OpenSearchServerless::Collection'
+    DependsOn:
+      - KBSecurityPolicy
+      - KBNetworkPolicy
+      - KBDataAccessPolicy
+    Properties:
+      Name: !Sub ${OpenSearchCollectionName}-${Environment}
+      Type: VECTORSEARCH
+      StandbyReplicas: DISABLED
+      Description: Collection to hold vector search data
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: SAM
+
+  KnowledgeBaseLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-knowledge-base-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-knowledge-base-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !GetAtt KnowledgeBaseBucket.Arn
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                  - aoss:DashboardAccessAll
+                Resource: !GetAtt KnowledgeBaseCollection.Arn
+
+  KnowledgeBaseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-knowledge-base-function-${Environment}
+      Handler: com.github.aws.tutorials.rag.knowledge.KnowledgeBaseHandler::handleRequest
+      Runtime: java21
+      Role: !GetAtt KnowledgeBaseLambdaRole.Arn
+      CodeUri: .
+      Environment:
+        Variables:
+          APP_ENVIRONMENT: !Ref Environment
+          OPENSEARCH_URL: !GetAtt KnowledgeBaseCollection.CollectionEndpoint
+          OPENSEARCH_HOST: !Sub '${KnowledgeBaseCollection.Id}.${AWS::Region}.aoss.amazonaws.com'
+          COLLECTION_NAME: !Sub ${OpenSearchCollectionName}-${Environment}
+          INDEX_NAME: !Ref OpenSearchIndexName
+      MemorySize: 512
+      Timeout: 30
+      Events:
+        EventBridgeEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.s3
+              detail-type:
+                - Object Created
+              detail:
+                bucket:
+                  name:
+                    - !Ref KnowledgeBaseBucket
+
+Outputs:
+  S3BucketName:
+    Description: Name for knowledge base bucket S3
+    Value: !Ref KnowledgeBaseBucket
+  S3BucketArn:
+    Description: ARN for knowledge base bucket S3
+    Value: !GetAtt KnowledgeBaseBucket.Arn
+  OpenSearchDashboardURL:
+    Description: URL for OpenSearch Dashboard
+    Value: !GetAtt KnowledgeBaseCollection.DashboardEndpoint
+  OpenSearchCollectionARN:
+    Description: ARN for OpenSearch Collection
+    Value: !GetAtt KnowledgeBaseCollection.Arn
+  OpenSearchVectorIndexName:
+    Description: Vector index name
+    Value: !Ref OpenSearchIndexName
+  OpenSearchEndpoint:
+    Description: OpenSearch collection endpoint
+    Value: !GetAtt KnowledgeBaseCollection.CollectionEndpoint
+  FunctionName:
+    Description: Name Lambda function for Knowledge Base
+    Value: !Ref KnowledgeBaseFunction
