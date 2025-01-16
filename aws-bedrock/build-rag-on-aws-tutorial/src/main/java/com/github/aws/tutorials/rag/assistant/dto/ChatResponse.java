@@ -1,7 +1,8 @@
-package com.github.aws.tutorials.rag.knowledge.dto;
+package com.github.aws.tutorials.rag.assistant.dto;
+
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.ToString;
@@ -10,7 +11,7 @@ import lombok.ToString;
 @Setter
 @ToString
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class S3Event {
-    @JsonProperty("detail")
-    private S3Detail detail;
+@AllArgsConstructor
+public class ChatResponse {
+    private String message;
 }

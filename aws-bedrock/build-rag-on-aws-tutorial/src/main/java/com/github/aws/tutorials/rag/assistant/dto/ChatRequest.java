@@ -1,14 +1,15 @@
-package com.github.aws.tutorials.rag.knowledge.dto;
+package com.github.aws.tutorials.rag.assistant.dto;
+
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.ToString;
 
 @Getter
 @Setter
+@ToString
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class S3Object {
-    private String key;
-    private Long size;
-    private String etag;
+public class ChatRequest {
+    private String message;
 }

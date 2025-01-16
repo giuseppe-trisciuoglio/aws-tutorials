@@ -31,6 +31,10 @@ Parameters:
     Default: rag-on-aws
     Description: Project name for resource tagging
 
+  OpenAIApiKeySecretARN:
+    Description: ARN of the secret containing the OpenAI API key.
+    Type: String
+    
 Globals:
   Function:
     Tags:
@@ -44,17 +48,9 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub ${AWS::StackName}-knowledge-base-bucket-${Environment}
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: True
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -139,7 +135,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:GetObject
-                Resource: !GetAtt KnowledgeBaseBucket.Arn
+                Resource: !Sub arn:aws:s3:::${KnowledgeBaseBucket}/*
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
@@ -149,7 +145,14 @@ Resources:
                   - aoss:APIAccessAll
                   - aoss:DashboardAccessAll
                 Resource: !GetAtt KnowledgeBaseCollection.Arn
-
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: SAM
+          
   KnowledgeBaseFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -167,19 +170,113 @@ Resources:
           INDEX_NAME: !Ref OpenSearchIndexName
       MemorySize: 512
       Timeout: 30
+      
+  KnowledgeBaseBucketEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${AWS::StackName}-knowledge-base-s3-event-rule-${Environment}
+      Description: "Rule to trigger Lambda function on S3 event"
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - "Object Created"
+          - "Object Updated"
+        detail:
+          bucket:
+            name:
+              - !Ref KnowledgeBaseBucket
+      Targets:
+        - Arn: !GetAtt KnowledgeBaseFunction.Arn
+          Id: "ProcessS3EventTarget"
+  KnowledgeBaseLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref KnowledgeBaseFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt KnowledgeBaseBucketEventRule.Arn
+      
+  
+      
+
+
+  AssistantApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: dev
+      TracingEnabled: true
+  AssistantFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-assistant-function-${Environment}
+      Handler: com.github.aws.tutorials.rag.assistant.AssistantHandler::handleRequest
+      Runtime: java21
+      Role: !GetAtt AssistantFunctionRole.Arn
+      CodeUri: .
+      Tracing: Active
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref AssistantTable
+      AutoPublishAlias: live
+      SnapStart:
+        ApplyOn: PublishedVersions
       Events:
-        EventBridgeEvent:
-          Type: EventBridgeRule
+        ApiEvents:
+          Type: Api
           Properties:
-            Pattern:
-              source:
-                - aws.s3
-              detail-type:
-                - Object Created
-              detail:
-                bucket:
-                  name:
-                    - !Ref KnowledgeBaseBucket
+            Path: /api/assistant/messages
+            Method: POST
+            RestApiId: !Ref AssistantApi
+  AssistantTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: !Sub ${AWS::StackName}-messages-${Environment}
+      PrimaryKey:
+        Name: id
+        Type: String
+  AssistantFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-assistant-function-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-assistant-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                  - aoss:DashboardAccessAll
+                Resource: !GetAtt KnowledgeBaseCollection.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:*
+                Resource: !GetAtt AssistantTable.Arn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref OpenAIApiKeySecretARN
 
 Outputs:
   S3BucketName:
@@ -200,6 +297,13 @@ Outputs:
   OpenSearchEndpoint:
     Description: OpenSearch collection endpoint
     Value: !GetAtt KnowledgeBaseCollection.CollectionEndpoint
-  FunctionName:
+  KnowledgeBaseFunctionName:
     Description: Name Lambda function for Knowledge Base
     Value: !Ref KnowledgeBaseFunction
+  AssistantFunctionName:
+    Description: Name Lambda function for Assistant
+    Value: !Ref AssistantFunction
+  AssistantEndpoint:
+    Description: API Gateway Endpoint
+    Value:
+      Fn::Sub: https://${AssistantApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/
