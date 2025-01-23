@@ -2,6 +2,8 @@
 
 This is a simple tutorial to create a Rag System on AWS.
 
+Link to post on Medium: [Tutorial Build RAG on AWS](https://medium.com/@giuseppetrisciuoglio/building-a-rag-system-on-aws-with-langchain4j-and-chatgpt-77d934606ced)
+
 ## Architecture
 
 The architecture of the system is composed of the following components:

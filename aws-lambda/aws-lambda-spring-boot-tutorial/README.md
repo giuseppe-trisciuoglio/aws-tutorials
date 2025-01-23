@@ -2,6 +2,8 @@
 
 This is a simple tutorial to create a AWS Lambda function with Spring Boot.
 
+Link to post on Medium: [Tutorial AWS Lambda with Spring Boot](https://medium.com/@giuseppetrisciuoglio/how-to-build-a-serverless-spring-boot-rest-api-with-aws-lambda-61beb0d5fa62)
+
 ## Requirements
 - Java 21
 - Maven 3.9.x
