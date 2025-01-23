@@ -15,14 +15,12 @@ import static dev.langchain4j.model.openai.OpenAiEmbeddingModelName.TEXT_EMBEDDI
 @RequiredArgsConstructor
 @Slf4j
 public class OpenAIKnowledgeBaseIngestor implements KnowledgeBaseIngestor {
-    private static final String OPENAI_API_KEY = "openai-api-key";
 
     private final EmbeddingStoreIngestor ingestor;
     
     public OpenAIKnowledgeBaseIngestor() {
-        SecretManagerRetriever secretManagerRetriever = new SecretManagerRetriever();
         EmbeddingModel openAiEmbeddingModel = OpenAiEmbeddingModel.builder()
-                .apiKey(secretManagerRetriever.getSecret(OPENAI_API_KEY))
+                .apiKey(EnvUtils.getOpenAiApiKey())
                 .modelName(TEXT_EMBEDDING_3_SMALL)
                 .build();
 

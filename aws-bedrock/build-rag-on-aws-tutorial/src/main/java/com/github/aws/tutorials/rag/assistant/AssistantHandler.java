@@ -7,12 +7,10 @@ import com.github.aws.tutorials.rag.assistant.dto.ApiGatewayEvent;
 import com.github.aws.tutorials.rag.assistant.dto.ChatRequest;
 import com.github.aws.tutorials.rag.assistant.dto.ChatResponse;
 import com.github.aws.tutorials.rag.utility.EnvUtils;
-import com.github.aws.tutorials.rag.utility.SecretManagerRetriever;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatLanguageModel;
-import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.store.embedding.EmbeddingStore;
@@ -24,23 +22,15 @@ import java.io.*;
 import java.util.Map;
 
 import static com.github.aws.tutorials.rag.utility.ResponseUtils.createResponse;
-import static dev.langchain4j.model.openai.OpenAiChatModelName.GPT_4_O_MINI;
 
 @Slf4j
 @RequiredArgsConstructor
 public class AssistantHandler implements RequestStreamHandler {
-    private static final String OPENAI_API_KEY = "openai-api-key";
 
     private final Assistant assistant;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AssistantHandler() {
-        SecretManagerRetriever secretManagerRetriever = new SecretManagerRetriever();
-        ChatLanguageModel chatModel = OpenAiChatModel.builder()
-                .apiKey(secretManagerRetriever.getSecret(OPENAI_API_KEY))
-                .modelName(GPT_4_O_MINI)
-                .build();
-
         EmbeddingStore<TextSegment> embeddingStore = EnvUtils.getEmbeddingStore();
         DynamoDbClient dynamoDbClient = EnvUtils.getDynamoDbClient();
         String tableName = EnvUtils.getDynamoDbTableName();
@@ -49,11 +39,18 @@ public class AssistantHandler implements RequestStreamHandler {
                 .maxMessages(10)
                 .chatMemoryStore(new DynamoDBChatMemoryStore(dynamoDbClient, tableName))
                 .build();
+        
+        ContentRetriever contentRetriever = EmbeddingStoreContentRetriever.builder()
+                .embeddingStore(embeddingStore)
+                .embeddingModel(EnvUtils.getEmbeddingModel())
+                .maxResults(2) 
+                .minScore(0.5)
+                .build();
 
         assistant = AiServices.builder(Assistant.class)
-                .chatLanguageModel(chatModel)
+                .chatLanguageModel(EnvUtils.getChatLanguageModel())
                 .chatMemory(chatMemory)
-                .contentRetriever(EmbeddingStoreContentRetriever.from(embeddingStore))
+                .contentRetriever(contentRetriever)
                 .build();
     }
 

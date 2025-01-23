@@ -13,8 +13,6 @@ import dev.langchain4j.data.document.loader.amazon.s3.AmazonS3DocumentLoader;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
-import java.util.HashMap;
-import java.util.Map;
 
 import static com.github.aws.tutorials.rag.utility.ResponseUtils.createResponse;
 
