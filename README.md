@@ -8,6 +8,7 @@ The tutorials cover a range of topics, from basic setup and configuration to adv
 
 ### AWS Lambda
 - [Spring Boot on AWS Lambda](aws-lambda/aws-lambda-spring-boot-tutorial/README.md)
+### AWS Bedrock
 - [RAG System on AWS](aws-bedrock/build-rag-on-aws-tutorial/README.md)
 
 ## Disclaimer
