@@ -1,0 +1,42 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "PrivateSubnet1",
+    "ParameterValue": "subnet-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "PrivateSubnet2",
+    "ParameterValue": "subnet-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "VpcCidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "BrokerInstanceType",
+    "ParameterValue": "mq.t3.micro"
+  },
+  {
+    "ParameterKey": "BrokerEngineVersion",
+    "ParameterValue": "3.13"
+  },
+  {
+    "ParameterKey": "AdminUsername",
+    "ParameterValue": "supplieradmin"
+  },
+  {
+    "ParameterKey": "SuffissoName",
+    "ParameterValue": "gt"
+  },
+  {
+    "ParameterKey": "EnviromentTag",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ApplicationTag",
+    "ParameterValue": "supplier-gateway"
+  }
+]

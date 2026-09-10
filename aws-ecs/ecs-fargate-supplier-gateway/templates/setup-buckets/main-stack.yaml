@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Stack to create the S3 bucket hosting the CloudFormation templates"
+
+Parameters:
+  SuffissoName:
+    Type: String
+    Description: "Suffix for resource names"
+    AllowedPattern: "[a-z0-9-]+"
+    ConstraintDescription: "Must contain only lowercase letters, numbers and hyphens"
+
+  EnviromentTag:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stage, prod]
+    Description: "Environment tag (dev, stage, prod)"
+
+  ApplicationTag:
+    Type: String
+    Description: "Tag to identify the application"
+    AllowedPattern: "[a-z0-9-]+"
+    ConstraintDescription: "Must contain only lowercase letters, numbers and hyphens"
+
+Resources:
+  # Bucket dedicato a ospitare i template CloudFormation che i nested-stack
+  # di ogni step referenziano via TemplateURL.
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${SuffissoName}-${ApplicationTag}-cf-templates-${EnviromentTag}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-cf-templates-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  TemplatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TemplatesBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EnforceTLS
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "${TemplatesBucket.Arn}/*"
+              - !GetAtt TemplatesBucket.Arn
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
+
+Outputs:
+  TemplatesBucketName:
+    Description: "Name of the S3 bucket for the CloudFormation templates"
+    Value: !Ref TemplatesBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-TemplatesBucketName
+
+  TemplatesBucketArn:
+    Description: "ARN of the S3 bucket for the CloudFormation templates"
+    Value: !GetAtt TemplatesBucket.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-TemplatesBucketArn

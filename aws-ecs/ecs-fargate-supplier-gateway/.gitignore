@@ -1,0 +1,23 @@
+### Standard gitignore for the tutorial project
+
+# Parameters files (they may contain real values)
+templates/**/parameters.json
+!templates/**/parameters.json.dist
+
+# Build / packaging artifacts
+*.zip
+*.tar.gz
+.aws-sam/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+**/*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local shell session
+.cloudshell/

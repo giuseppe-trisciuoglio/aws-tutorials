@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Stack to create the supplier secrets in AWS Secrets Manager"
+
+Parameters:
+  SuffissoName:
+    Type: String
+    Description: "Suffix for resource names"
+
+  EnviromentTag:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stage, prod]
+    Description: "Environment tag"
+
+  ApplicationTag:
+    Type: String
+    Description: "Tag to identify the application"
+
+  # Secrets specifici per supplier. Le credenziali vere non stanno nel template
+  # né nei parameter: il valore iniziale e un placeholder vuoto, e vengono
+  # aggiornati a runtime via `aws secretsmanager put-secret-value`.
+  BookingComApiKeySecret:
+    Type: String
+    NoEcho: true
+    Description: "API key Booking.com Demand API"
+    Default: "change-me-before-deploy"
+
+  ExpediaApiKeySecret:
+    Type: String
+    NoEcho: true
+    Description: "API key Expedia Rapid API"
+    Default: "change-me-before-deploy"
+
+  ExpediaBearerTokenSecret:
+    Type: String
+    NoEcho: true
+    Description: "Bearer token Expedia Rapid API"
+    Default: "change-me-before-deploy"
+
+  HotelBedsApiKeySecret:
+    Type: String
+    NoEcho: true
+    Description: "API key HotelBeds Booking API"
+    Default: "change-me-before-deploy"
+
+  HotelBedsSharedSecretSecret:
+    Type: String
+    NoEcho: true
+    Description: "Shared secret HotelBeds"
+    Default: "change-me-before-deploy"
+
+Resources:
+  # Ogni supplier ha il suo secret. Le credenziali sono iniettate nei task
+  # definitions come environment variables via la chiave `secrets`, che
+  # recupera il valore all'avvio del container con un ruolo IAM dedicato.
+
+  BookingComApiKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${SuffissoName}/${ApplicationTag}/supplier/booking-com
+      Description: "API key for the Booking.com Demand API"
+      SecretString: !Sub "{\"api_key\":\"${BookingComApiKeySecret}\"}"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: supplier
+          Value: booking-com
+
+  ExpediaApiKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${SuffissoName}/${ApplicationTag}/supplier/expedia
+      Description: "Credentials for the Expedia Rapid API (API key + bearer token)"
+      SecretString: !Sub "{\"api_key\":\"${ExpediaApiKeySecret}\",\"bearer_token\":\"${ExpediaBearerTokenSecret}\"}"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: supplier
+          Value: expedia
+
+  HotelBedsCredentials:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${SuffissoName}/${ApplicationTag}/supplier/hotelbeds
+      Description: "Credentials for the HotelBeds Booking API (API key + shared secret)"
+      SecretString: !Sub "{\"api_key\":\"${HotelBedsApiKeySecret}\",\"shared_secret\":\"${HotelBedsSharedSecretSecret}\"}"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: supplier
+          Value: hotelbeds
+
+Outputs:
+  SecretsPrefix:
+    Description: "Common prefix for the supplier secrets"
+    Value: !Sub "${SuffissoName}/${ApplicationTag}/supplier"
+
+  BookingComSecretArn:
+    Description: "ARN of the Booking.com secret"
+    Value: !Ref BookingComApiKey
+    Export:
+      Name: !Sub ${AWS::StackName}-BookingComSecretArn
+
+  ExpediaSecretArn:
+    Description: "ARN of the Expedia secret"
+    Value: !Ref ExpediaApiKey
+    Export:
+      Name: !Sub ${AWS::StackName}-ExpediaSecretArn
+
+  HotelBedsSecretArn:
+    Description: "ARN of the HotelBeds secret"
+    Value: !Ref HotelBedsCredentials
+    Export:
+      Name: !Sub ${AWS::StackName}-HotelBedsSecretArn

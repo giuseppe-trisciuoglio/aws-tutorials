@@ -1,0 +1,34 @@
+[
+  {
+    "ParameterKey": "SuffissoName",
+    "ParameterValue": "gt"
+  },
+  {
+    "ParameterKey": "EnviromentTag",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ApplicationTag",
+    "ParameterValue": "supplier-gateway"
+  },
+  {
+    "ParameterKey": "BookingComApiKeySecret",
+    "ParameterValue": "change-me-before-deploy"
+  },
+  {
+    "ParameterKey": "ExpediaApiKeySecret",
+    "ParameterValue": "change-me-before-deploy"
+  },
+  {
+    "ParameterKey": "ExpediaBearerTokenSecret",
+    "ParameterValue": "change-me-before-deploy"
+  },
+  {
+    "ParameterKey": "HotelBedsApiKeySecret",
+    "ParameterValue": "change-me-before-deploy"
+  },
+  {
+    "ParameterKey": "HotelBedsSharedSecretSecret",
+    "ParameterValue": "change-me-before-deploy"
+  }
+]

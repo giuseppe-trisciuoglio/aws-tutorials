@@ -1,0 +1,1002 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Main stack: ECS cluster, ALB, 4 task definitions and 4 Fargate services"
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: "VPC where the ECS cluster is deployed"
+
+  VpcCidr:
+    Type: String
+    Description: "VPC CIDR"
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: "First public subnet for the ALB"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: "Second public subnet for the ALB"
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: "First private subnet for the tasks"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: "Second private subnet for the tasks"
+
+  BrokerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: "AmazonMQ broker security group"
+
+  BookingComSecretArn:
+    Type: String
+    Description: "ARN of the Booking.com secret"
+
+  ExpediaSecretArn:
+    Type: String
+    Description: "ARN of the Expedia secret"
+
+  HotelBedsSecretArn:
+    Type: String
+    Description: "ARN of the HotelBeds secret"
+
+  BrokerAmqpEndpoint:
+    Type: String
+    Description: "Broker AMQP endpoint (amqps://host:port)"
+
+  BrokerSecretArn:
+    Type: String
+    Description: "ARN of the broker Secrets Manager secret (contains username and password)"
+
+  DBEndpoint:
+    Type: String
+    Description: "PostgreSQL database endpoint (hostname)"
+
+  DBPort:
+    Type: Number
+    Default: 5432
+    Description: "PostgreSQL database port"
+
+  DBName:
+    Type: String
+    Description: "PostgreSQL database name"
+
+  DBSecretArn:
+    Type: String
+    Description: "ARN of the database Secrets Manager secret (username and password)"
+
+  ContainerImage:
+    Type: String
+    Description: "Docker image URI (e.g. xxx.dkr.ecr.region.amazonaws.com/supplier-gateway:latest)"
+
+  ContainerPort:
+    Type: Number
+    Default: 8080
+    Description: "HTTP port exposed by the gateway container"
+
+  GatewayCpu:
+    Type: Number
+    Default: 512
+    Description: "CPU for the gateway task (1024 = 1 vCPU)"
+
+  GatewayMemory:
+    Type: Number
+    Default: 1024
+    Description: "Memory (MB) for the gateway task"
+
+  WorkerCpu:
+    Type: Number
+    Default: 1024
+    Description: "CPU for the worker task"
+
+  WorkerMemory:
+    Type: Number
+    Default: 2048
+    Description: "Memory (MB) for the worker task"
+
+  AggregatorCpu:
+    Type: Number
+    Default: 512
+    Description: "CPU for the aggregator task"
+
+  AggregatorMemory:
+    Type: Number
+    Default: 1024
+    Description: "Memory (MB) for the aggregator task"
+
+  EventConsumerCpu:
+    Type: Number
+    Default: 512
+    Description: "CPU for the event consumer task"
+
+  EventConsumerMemory:
+    Type: Number
+    Default: 1024
+    Description: "Memory (MB) for the event consumer task"
+
+  GatewayDesiredCount:
+    Type: Number
+    Default: 2
+    Description: "Desired number of gateway tasks"
+
+  WorkerDesiredCount:
+    Type: Number
+    Default: 2
+    Description: "Desired number of worker tasks"
+
+  AggregatorDesiredCount:
+    Type: Number
+    Default: 1
+    Description: "Desired number of aggregator tasks"
+
+  EventConsumerDesiredCount:
+    Type: Number
+    Default: 1
+    Description: "Desired number of event consumer tasks"
+
+  HealthCheckPath:
+    Type: String
+    Default: /api/alive
+    Description: "ALB health check path"
+
+  SuffissoName:
+    Type: String
+    Description: "Suffix for resource names"
+
+  EnviromentTag:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stage, prod]
+    Description: "Environment tag"
+
+  ApplicationTag:
+    Type: String
+    Description: "Tag to identify the application"
+
+Resources:
+  # ----------------------------------------------------------------------
+  # ECS Cluster con Container Insights abilitato
+  # ----------------------------------------------------------------------
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${SuffissoName}-${ApplicationTag}-cluster-${EnviromentTag}
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 0
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-ecs-cluster-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  # ----------------------------------------------------------------------
+  # IAM Roles
+  # ----------------------------------------------------------------------
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SuffissoName}-${ApplicationTag}-execution-role-${EnviromentTag}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      # AmazonECSTaskExecutionRolePolicy non include secretsmanager:GetSecretValue,
+      # ma i valori dichiarati in ContainerDefinitions.Secrets sono risolti
+      # dall'execution role prima dell'avvio del container. Senza questa policy
+      # il task fallisce con ResourceInitializationError: unable to pull secrets.
+      Policies:
+        - PolicyName: SecretsInjection
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DBSecretArn
+                  - !Ref BrokerSecretArn
+                  - !Ref BookingComSecretArn
+                  - !Ref ExpediaSecretArn
+                  - !Ref HotelBedsSecretArn
+              # Il secret master generato da RDS (ManageMasterUserPassword) e
+              # cifrato con la chiave gestita aws/secretsmanager.
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    "kms:ViaService": !Sub "secretsmanager.${AWS::Region}.amazonaws.com"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  # Gateway task role: solo Secrets Manager per SPRING_PROFILES_ACTIVE
+  # e altri config. Le chiamate ai supplier sono HTTP e vanno via NAT/
+  # VPC endpoints, non richiedono IAM.
+  GatewayTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SuffissoName}-${ApplicationTag}-gateway-role-${EnviromentTag}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SupplierSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref BookingComSecretArn
+                  - !Ref ExpediaSecretArn
+                  - !Ref HotelBedsSecretArn
+        - PolicyName: SSMSessionManager
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  # Worker task role: deve poter chiamare Secrets Manager per leggere le
+  # credenziali supplier e usarle nelle request HTTP. SSM per ECS Exec.
+  WorkerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SuffissoName}-${ApplicationTag}-worker-role-${EnviromentTag}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SupplierSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref BookingComSecretArn
+                  - !Ref ExpediaSecretArn
+                  - !Ref HotelBedsSecretArn
+        - PolicyName: InfrastructureSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DBSecretArn
+                  - !Ref BrokerSecretArn
+        - PolicyName: SSMSessionManager
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  # Aggregator task role: lettura Secrets + accesso a Redis (design
+  # proposto dall'articolo) o PostgreSQL (implementazione attuale).
+  AggregatorTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SuffissoName}-${ApplicationTag}-aggregator-role-${EnviromentTag}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SupplierSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref BookingComSecretArn
+                  - !Ref ExpediaSecretArn
+                  - !Ref HotelBedsSecretArn
+        - PolicyName: InfrastructureSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DBSecretArn
+                  - !Ref BrokerSecretArn
+        - PolicyName: SSMSessionManager
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  # Event consumer task role: stesso perimetro degli altri.
+  EventConsumerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${SuffissoName}-${ApplicationTag}-event-consumer-role-${EnviromentTag}
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SupplierSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref BookingComSecretArn
+                  - !Ref ExpediaSecretArn
+                  - !Ref HotelBedsSecretArn
+        - PolicyName: InfrastructureSecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DBSecretArn
+                  - !Ref BrokerSecretArn
+        - PolicyName: SSMSessionManager
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  # ----------------------------------------------------------------------
+  # Task Definitions (4 servizi dallo stesso Docker image)
+  #
+  # Differenziazione tramite SPRING_PROFILES_ACTIVE: ogni servizio riceve
+  # un profilo dedicato che (nelle intenzioni del design) attiva solo i
+  # bean rilevanti. L'implementazione attuale del gateway non ha ancora
+  # questo supporto, quindi il deploy è "design proposed".
+  # ----------------------------------------------------------------------
+
+  GatewayTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${SuffissoName}-${ApplicationTag}-gateway-${EnviromentTag}
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref GatewayCpu
+      Memory: !Ref GatewayMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt GatewayTaskRole.Arn
+      ContainerDefinitions:
+        - Name: gateway
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: gateway
+            - Name: RABBITMQ_HOST
+              Value: !Select [ 0, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: RABBITMQ_PORT
+              Value: !Select [ 1, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub "jdbc:postgresql://${DBEndpoint}:${DBPort}/${DBName}?sslmode=require"
+          Secrets:
+            - Name: SPRING_DATASOURCE_USERNAME
+              ValueFrom: !Sub "${DBSecretArn}:username::"
+            - Name: SPRING_DATASOURCE_PASSWORD
+              ValueFrom: !Sub "${DBSecretArn}:password::"
+            - Name: RABBITMQ_USER
+              ValueFrom: !Sub "${BrokerSecretArn}:username::"
+            - Name: RABBITMQ_PASSWORD
+              ValueFrom: !Sub "${BrokerSecretArn}:password::"
+            - Name: BOOKING_COM_API_KEY
+              ValueFrom: !Sub "${BookingComSecretArn}:api_key::"
+            - Name: EXPEDIA_API_KEY
+              ValueFrom: !Sub "${ExpediaSecretArn}:api_key::"
+            - Name: EXPEDIA_BEARER_TOKEN
+              ValueFrom: !Sub "${ExpediaSecretArn}:bearer_token::"
+            - Name: HOTELBEDS_API_KEY
+              ValueFrom: !Sub "${HotelBedsSecretArn}:api_key::"
+            - Name: HOTELBEDS_SHARED_SECRET
+              ValueFrom: !Sub "${HotelBedsSecretArn}:shared_secret::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref GatewayLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: gateway
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: gateway
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${SuffissoName}-${ApplicationTag}-worker-${EnviromentTag}
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref WorkerCpu
+      Memory: !Ref WorkerMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt WorkerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref ContainerImage
+          Essential: true
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: worker
+            - Name: RABBITMQ_HOST
+              Value: !Select [ 0, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: RABBITMQ_PORT
+              Value: !Select [ 1, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: SEARCH_DEADLINE_SECONDS
+              Value: "8"
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub "jdbc:postgresql://${DBEndpoint}:${DBPort}/${DBName}?sslmode=require"
+          Secrets:
+            - Name: SPRING_DATASOURCE_USERNAME
+              ValueFrom: !Sub "${DBSecretArn}:username::"
+            - Name: SPRING_DATASOURCE_PASSWORD
+              ValueFrom: !Sub "${DBSecretArn}:password::"
+            - Name: RABBITMQ_USER
+              ValueFrom: !Sub "${BrokerSecretArn}:username::"
+            - Name: RABBITMQ_PASSWORD
+              ValueFrom: !Sub "${BrokerSecretArn}:password::"
+            - Name: BOOKING_COM_API_KEY
+              ValueFrom: !Sub "${BookingComSecretArn}:api_key::"
+            - Name: EXPEDIA_API_KEY
+              ValueFrom: !Sub "${ExpediaSecretArn}:api_key::"
+            - Name: EXPEDIA_BEARER_TOKEN
+              ValueFrom: !Sub "${ExpediaSecretArn}:bearer_token::"
+            - Name: HOTELBEDS_API_KEY
+              ValueFrom: !Sub "${HotelBedsSecretArn}:api_key::"
+            - Name: HOTELBEDS_SHARED_SECRET
+              ValueFrom: !Sub "${HotelBedsSecretArn}:shared_secret::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WorkerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: worker
+
+  AggregatorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${SuffissoName}-${ApplicationTag}-aggregator-${EnviromentTag}
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref AggregatorCpu
+      Memory: !Ref AggregatorMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt AggregatorTaskRole.Arn
+      ContainerDefinitions:
+        - Name: aggregator
+          Image: !Ref ContainerImage
+          Essential: true
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: aggregator
+            - Name: RABBITMQ_HOST
+              Value: !Select [ 0, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: RABBITMQ_PORT
+              Value: !Select [ 1, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: SEARCH_DEADLINE_SECONDS
+              Value: "8"
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub "jdbc:postgresql://${DBEndpoint}:${DBPort}/${DBName}?sslmode=require"
+          Secrets:
+            - Name: SPRING_DATASOURCE_USERNAME
+              ValueFrom: !Sub "${DBSecretArn}:username::"
+            - Name: SPRING_DATASOURCE_PASSWORD
+              ValueFrom: !Sub "${DBSecretArn}:password::"
+            - Name: RABBITMQ_USER
+              ValueFrom: !Sub "${BrokerSecretArn}:username::"
+            - Name: RABBITMQ_PASSWORD
+              ValueFrom: !Sub "${BrokerSecretArn}:password::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref AggregatorLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: aggregator
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: aggregator
+
+  EventConsumerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${SuffissoName}-${ApplicationTag}-event-consumer-${EnviromentTag}
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref EventConsumerCpu
+      Memory: !Ref EventConsumerMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt EventConsumerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: event-consumer
+          Image: !Ref ContainerImage
+          Essential: true
+          Environment:
+            - Name: SPRING_PROFILES_ACTIVE
+              Value: event-consumer
+            - Name: RABBITMQ_HOST
+              Value: !Select [ 0, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: RABBITMQ_PORT
+              Value: !Select [ 1, !Split [ ":", !Select [ 1, !Split [ "//", !Ref BrokerAmqpEndpoint ] ] ] ]
+            - Name: SPRING_DATASOURCE_URL
+              Value: !Sub "jdbc:postgresql://${DBEndpoint}:${DBPort}/${DBName}?sslmode=require"
+          Secrets:
+            - Name: SPRING_DATASOURCE_USERNAME
+              ValueFrom: !Sub "${DBSecretArn}:username::"
+            - Name: SPRING_DATASOURCE_PASSWORD
+              ValueFrom: !Sub "${DBSecretArn}:password::"
+            - Name: RABBITMQ_USER
+              ValueFrom: !Sub "${BrokerSecretArn}:username::"
+            - Name: RABBITMQ_PASSWORD
+              ValueFrom: !Sub "${BrokerSecretArn}:password::"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref EventConsumerLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: event-consumer
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: event-consumer
+
+  # ----------------------------------------------------------------------
+  # CloudWatch Log Groups — uno per servizio
+  # ----------------------------------------------------------------------
+
+  GatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${SuffissoName}-${ApplicationTag}-gateway-${EnviromentTag}
+      RetentionInDays: 14
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: gateway
+
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${SuffissoName}-${ApplicationTag}-worker-${EnviromentTag}
+      RetentionInDays: 14
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: worker
+
+  AggregatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${SuffissoName}-${ApplicationTag}-aggregator-${EnviromentTag}
+      RetentionInDays: 14
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: aggregator
+
+  EventConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${SuffissoName}-${ApplicationTag}-event-consumer-${EnviromentTag}
+      RetentionInDays: 14
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: event-consumer
+
+  # ----------------------------------------------------------------------
+  # ALB — solo il gateway e dietro l'ALB, gli altri servizi consumano
+  # dalla coda RabbitMQ senza bisogno di un endpoint HTTP pubblico.
+  # ----------------------------------------------------------------------
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for the Application Load Balancer"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # Solo la 80: l'ALB espone un unico listener HTTP. In produzione si
+        # aggiunge un listener HTTPS con certificato ACM e si apre la 443.
+        - Description: "HTTP from the internet (tutorial only; production should redirect to 443)"
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-alb-sg-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for all ECS tasks"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: "Gateway traffic from the ALB"
+          IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - Description: "AMQP to the broker"
+          IpProtocol: tcp
+          FromPort: 5671
+          ToPort: 5671
+          SourceSecurityGroupId: !Ref BrokerSecurityGroupId
+        - Description: "All internal traffic between tasks (for consumers that publish)"
+          IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-task-sg-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub alb-${SuffissoName}-${ApplicationTag}-${EnviromentTag}
+      Scheme: internet-facing
+      Type: application
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-alb-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  GatewayTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      # Il nome di un target group ha un limite di 32 caratteri: qui si omette
+      # "gateway", gia implicito nell'ApplicationTag. Il tag Name resta esteso.
+      Name: !Sub ${SuffissoName}-${ApplicationTag}-tg-${EnviromentTag}
+      TargetType: ip
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-gateway-tg-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref GatewayTargetGroup
+
+  # ----------------------------------------------------------------------
+  # ECS Services — uno per task definition
+  #
+  # Deployment configuration: rolling update con circuit breaker attivato.
+  # Se i task nuovi falliscono l'health check, il deploy si ferma e fa
+  # rollback automatico (articolo: "sicurezza senza complessità").
+  # ----------------------------------------------------------------------
+
+  GatewayService:
+    Type: AWS::ECS::Service
+    DependsOn: HTTPListener
+    Properties:
+      ServiceName: !Sub ${SuffissoName}-${ApplicationTag}-gateway-${EnviromentTag}
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref GatewayTaskDefinition
+      DesiredCount: !Ref GatewayDesiredCount
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: gateway
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref GatewayTargetGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: gateway
+
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${SuffissoName}-${ApplicationTag}-worker-${EnviromentTag}
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref WorkerTaskDefinition
+      DesiredCount: !Ref WorkerDesiredCount
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: worker
+
+  AggregatorService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${SuffissoName}-${ApplicationTag}-aggregator-${EnviromentTag}
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref AggregatorTaskDefinition
+      DesiredCount: !Ref AggregatorDesiredCount
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: aggregator
+
+  EventConsumerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${SuffissoName}-${ApplicationTag}-event-consumer-${EnviromentTag}
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref EventConsumerTaskDefinition
+      DesiredCount: !Ref EventConsumerDesiredCount
+      LaunchType: FARGATE
+      EnableExecuteCommand: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      Tags:
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+        - Key: service
+          Value: event-consumer
+
+Outputs:
+  ECSClusterName:
+    Description: "ECS cluster name"
+    Value: !Ref ECSCluster
+
+  ECSClusterArn:
+    Description: "ECS cluster ARN"
+    Value: !GetAtt ECSCluster.Arn
+
+  LoadBalancerDNS:
+    Description: "Public DNS of the Application Load Balancer"
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+
+  LoadBalancerArn:
+    Description: "Application Load Balancer ARN"
+    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerArn
+
+  GatewayServiceName:
+    Description: "Gateway service name"
+    Value: !Ref GatewayService
+
+  WorkerServiceName:
+    Description: "Worker service name"
+    Value: !Ref WorkerService
+
+  AggregatorServiceName:
+    Description: "Aggregator service name"
+    Value: !Ref AggregatorService
+
+  EventConsumerServiceName:
+    Description: "Event consumer service name"
+    Value: !Ref EventConsumerService
+
+  GatewayTaskDefinitionArn:
+    Description: "Gateway task definition ARN"
+    Value: !Ref GatewayTaskDefinition
+
+  TaskSecurityGroupId:
+    Description: "Task security group ID"
+    Value: !Ref TaskSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-TaskSecurityGroupId

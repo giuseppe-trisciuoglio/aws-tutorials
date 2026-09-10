@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Stack to create the VPC with public/private subnets and VPC endpoints"
+
+Parameters:
+  TemplateBucket:
+    Type: String
+    Description: "S3 bucket containing the CloudFormation templates"
+    AllowedPattern: "[a-zA-Z0-9.-]+"
+    ConstraintDescription: "Must be a valid S3 bucket name"
+
+  SuffissoName:
+    Type: String
+    Description: "Suffix for resource names"
+    AllowedPattern: "[a-z0-9-]+"
+    ConstraintDescription: "Must contain only lowercase letters, numbers and hyphens"
+
+  EnviromentTag:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, stage, prod]
+    Description: "Environment tag (dev, stage, prod)"
+
+  ApplicationTag:
+    Type: String
+    Description: "Tag to identify the application"
+    AllowedPattern: "[a-z0-9-]+"
+    ConstraintDescription: "Must contain only lowercase letters, numbers and hyphens"
+
+Resources:
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/${TemplateBucket}/setup-environment/vpc.yaml
+      Parameters:
+        SuffissoName: !Ref SuffissoName
+        EnviromentTag: !Ref EnviromentTag
+        ApplicationTag: !Ref ApplicationTag
+
+Outputs:
+  VpcId:
+    Description: "ID of the created VPC"
+    Value: !GetAtt VPCStack.Outputs.VpcId
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcId
+
+  VpcCidr:
+    Description: "VPC CIDR"
+    Value: !GetAtt VPCStack.Outputs.VpcCidr
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcCidr
+
+  PublicSubnet1:
+    Description: "Public subnet 1 ID"
+    Value: !GetAtt VPCStack.Outputs.PublicSubnet1
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnet1
+
+  PublicSubnet2:
+    Description: "Public subnet 2 ID"
+    Value: !GetAtt VPCStack.Outputs.PublicSubnet2
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnet2
+
+  PrivateSubnet1:
+    Description: "Private subnet 1 ID"
+    Value: !GetAtt VPCStack.Outputs.PrivateSubnet1
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnet1
+
+  PrivateSubnet2:
+    Description: "Private subnet 2 ID"
+    Value: !GetAtt VPCStack.Outputs.PrivateSubnet2
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnet2

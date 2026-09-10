@@ -1,0 +1,58 @@
+[
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "vpc-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "PrivateSubnet1",
+    "ParameterValue": "subnet-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "PrivateSubnet2",
+    "ParameterValue": "subnet-xxxxxxxxxxxxxxxxx"
+  },
+  {
+    "ParameterKey": "VpcCidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "DBName",
+    "ParameterValue": "hotelsearch"
+  },
+  {
+    "ParameterKey": "DBUsername",
+    "ParameterValue": "supplier_admin"
+  },
+  {
+    "ParameterKey": "DBInstanceClass",
+    "ParameterValue": "db.t4g.micro"
+  },
+  {
+    "ParameterKey": "DBEngineVersion",
+    "ParameterValue": "17.2"
+  },
+  {
+    "ParameterKey": "DBAllocatedStorage",
+    "ParameterValue": "20"
+  },
+  {
+    "ParameterKey": "DBMaxAllocatedStorage",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "MultiAZ",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "SuffissoName",
+    "ParameterValue": "gt"
+  },
+  {
+    "ParameterKey": "EnviromentTag",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ApplicationTag",
+    "ParameterValue": "supplier-gateway"
+  }
+]

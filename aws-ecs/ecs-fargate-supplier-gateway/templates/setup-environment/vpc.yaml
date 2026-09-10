@@ -1,0 +1,339 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Stack to create the VPC, public/private subnets, NAT Gateway and VPC endpoints"
+
+Parameters:
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: "CIDR for the VPC"
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: "Must be a valid CIDR (e.g. 10.0.0.0/16)"
+
+  PublicSubnet1CIDR:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: "CIDR for public subnet 1"
+
+  PublicSubnet2CIDR:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: "CIDR for public subnet 2"
+
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+    Description: "CIDR for private subnet 1"
+
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+    Description: "CIDR for private subnet 2"
+
+  SuffissoName:
+    Type: String
+    Description: "Suffix for resource names"
+
+  EnviromentTag:
+    Type: String
+    Description: "Environment tag"
+
+  ApplicationTag:
+    Type: String
+    Description: "Application name tag"
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-vpc-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  Public1Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [ 0, !GetAZs "" ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-public1-subnet-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  Public2Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [ 1, !GetAZs "" ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-public2-subnet-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [ 0, !GetAZs "" ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-private1-subnet-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [ 1, !GetAZs "" ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-private2-subnet-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-igw-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-public-rt-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref Public1Subnet
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref Public2Subnet
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-nat-eip-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref Public1Subnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-nat-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-private-rt-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # ----------------------------------------------------------------------
+  # VPC endpoints — il pezzo che riduce i costi nascosti del NAT gateway.
+  # Ogni task che tira un'immagine da ECR, pusha log su CloudWatch, o legge
+  # secrets da Secrets Manager passa per un endpoint privato invece di
+  # attraversare il NAT gateway (~3$/giorno + 0.045$/GB).
+  # ----------------------------------------------------------------------
+
+  EcrApiVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.api
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  EcrDkrVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  CloudWatchLogsVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  SecretsManagerVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref VpcEndpointSecurityGroup
+
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  # I VPC endpoint di tipo Interface accettano HTTPS dalle subnet private.
+  VpcEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for the Interface-type VPC endpoints"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCIDR
+          Description: "HTTPS from the VPC CIDR"
+      Tags:
+        - Key: Name
+          Value: !Sub ${SuffissoName}-${ApplicationTag}-vpce-sg-${EnviromentTag}
+        - Key: environment
+          Value: !Ref EnviromentTag
+        - Key: application
+          Value: !Ref ApplicationTag
+
+Outputs:
+  # Nessun Export: in un nested stack ${AWS::StackName} e il nome
+  # auto-generato da CloudFormation, quindi gli export non sarebbero
+  # referenziabili. Gli export utili sono esposti dal parent stack.
+  VpcId:
+    Description: "VPC ID"
+    Value: !Ref Vpc
+
+  VpcCidr:
+    Description: "VPC CIDR"
+    Value: !Ref VpcCIDR
+
+  PublicSubnet1:
+    Description: "Public Subnet 1"
+    Value: !Ref Public1Subnet
+
+  PublicSubnet2:
+    Description: "Public Subnet 2"
+    Value: !Ref Public2Subnet
+
+  PrivateSubnet1:
+    Description: "Private Subnet 1"
+    Value: !Ref PrivateSubnet1
+
+  PrivateSubnet2:
+    Description: "Private Subnet 2"
+    Value: !Ref PrivateSubnet2

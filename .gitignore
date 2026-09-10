@@ -373,3 +373,12 @@ Temporary Items
 **/target/
 **/**.toml
 **/dependency-reduced-pom.xml
+
+docs/
+!aws-ecs/ecs-fargate-supplier-gateway/docs/
+!aws-ecs/ecs-fargate-supplier-gateway/docs/architecture.png
+!aws-ecs/ecs-fargate-supplier-gateway/docs/architecture.svg
+!aws-ecs/ecs-fargate-supplier-gateway/docs/architecture.md
+
+aws-ecs/ecs-fargate-supplier-gateway/docs/icons/
+aws-ecs/ecs-fargate-supplier-gateway/docs/build-architecture-svg.py

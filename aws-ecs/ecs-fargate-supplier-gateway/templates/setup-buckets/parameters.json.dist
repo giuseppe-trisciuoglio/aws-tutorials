@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "SuffissoName",
+    "ParameterValue": "gt"
+  },
+  {
+    "ParameterKey": "EnviromentTag",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ApplicationTag",
+    "ParameterValue": "supplier-gateway"
+  }
+]
